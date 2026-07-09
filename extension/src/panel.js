@@ -6,6 +6,11 @@
 // it never computes, adjusts, rounds, or invents a value. In E0 there is no
 // LLM inside the extension at all; the conversational texture comes from the
 // engine's own narrations plus these templates.
+//
+// E1 addition: a keyword intent classifier (intent.js) picks which agent's
+// already-computed facts answer the question asked. This is still "select +
+// phrase, never originate" - the direct-answer card below is built only from
+// fields already present in feature_ready/agent_done/chairman payloads.
 
 const EnmaPanel = (() => {
   const AGENT_LABELS = {
@@ -68,6 +73,8 @@ const EnmaPanel = (() => {
       background: #111a2e; border: 1px solid #1f2a44;
       border-radius: 10px; padding: 8px 10px;
     }
+    .agent.direct-answer { background: #1a1233; }
+    .agent.direct-answer .head b { color: #c4b5fd; }
     .agent .head { display: flex; gap: 8px; align-items: baseline; }
     .agent .head b { font-size: 12.5px; }
     .stance { font-weight: 700; font-size: 11px; letter-spacing: .04em; }
@@ -103,6 +110,50 @@ const EnmaPanel = (() => {
   `;
 
   let root, els, busy = false;
+  // Per-run state for the E1 direct-answer feature: which agent facts have
+  // arrived so far, and what the current question was classified as.
+  let session = {};
+  let currentIntent = { category: "general" };
+
+  // Each builder returns a string made ONLY from fields already present in
+  // session[agent] (populated verbatim from feature_ready/agent_done) or the
+  // verdict payload - selection + phrasing, never a new number (doc 08 par.4).
+  const DIRECT_ANSWER_BUILDERS = {
+    technical: (s) => {
+      const t = s.technician;
+      if (!t) return null;
+      const f = t.features || {};
+      const bits = [];
+      if (f.regime) bits.push(`regime **${f.regime}**`);
+      if (f.z_tech != null) bits.push(`z-score ${f.z_tech}`);
+      if (f.volume_z != null) bits.push(`volume z ${f.volume_z}`);
+      const lead = bits.length ? `The Technician's read: ${bits.join(", ")}. ` : "";
+      return (lead + (t.reasoning || "")).trim() || null;
+    },
+    risk: (s) => {
+      const r = s.risk;
+      if (!r) return null;
+      const f = r.features || {};
+      const lead = (f.entry != null && f.stop != null)
+        ? `Entry ${f.entry}, stop ${f.stop}${f.atr_14 != null ? `, ATR(14) ${f.atr_14}` : ""}. `
+        : "";
+      return (lead + (r.reasoning || "")).trim() || null;
+    },
+    valuation: (s) => {
+      const f = s.fundamentalist;
+      if (!f) return null;
+      const lead = f.p_bull != null ? `Fundamentalist P(bull) ${f.p_bull}. ` : "";
+      return (lead + (f.reasoning || "")).trim() || null;
+    },
+    macro: (s) => {
+      const m = s.macro;
+      if (!m) return null;
+      const lead = m.p_bull != null ? `Macro Oracle P(bull) ${m.p_bull}. ` : "";
+      return (lead + (m.reasoning || "")).trim() || null;
+    },
+    // "verdict" intent has no separate card: the Chairman card that always
+    // renders IS the direct answer to "should I buy?" - no duplication.
+  };
 
   function h(tag, cls, text) {
     const el = document.createElement(tag);
@@ -143,9 +194,14 @@ const EnmaPanel = (() => {
         } else {
           line("warn", `${name}: feature model unavailable (${p.error || "unknown"})`);
         }
+        session[p.agent] = { ...(session[p.agent] || {}), features: p.features, p_bull: p.p_bull };
         break;
       }
       case "agent_done": {
+        session[p.agent] = {
+          ...(session[p.agent] || {}),
+          reasoning: p.reasoning, stance: p.stance, confidence: p.confidence,
+        };
         if (!p.reasoning) break;
         const card = h("div", "agent");
         const head = h("div", "head");
@@ -173,6 +229,7 @@ const EnmaPanel = (() => {
         break;
       }
       case "chairman":
+        renderDirectAnswer(currentIntent, session, p);
         renderVerdict(p);
         break;
       case "warning":
@@ -186,6 +243,21 @@ const EnmaPanel = (() => {
         setBusy(false);
         break;
     }
+  }
+
+  function renderDirectAnswer(intent, sess, v) {
+    const build = DIRECT_ANSWER_BUILDERS[intent.category];
+    if (!build) return; // "general" or "verdict": no shortcut, full report stands
+    const text = build(sess, v);
+    if (!text) return; // that agent's data never arrived (degraded run) - say nothing rather than guess
+    const card = h("div", "agent direct-answer");
+    card.style.borderColor = "#7c3aed";
+    const head = h("div", "head");
+    head.appendChild(h("b", "", "Enma's straight answer"));
+    card.appendChild(head);
+    card.appendChild(h("div", "body", text));
+    els.feed.appendChild(card);
+    els.feed.scrollTop = els.feed.scrollHeight;
   }
 
   function renderVerdict(v) {
@@ -232,6 +304,15 @@ const EnmaPanel = (() => {
     els.ask.disabled = b;
   }
 
+  const ACK_BY_INTENT = {
+    general: "Let me convene the council on this one.",
+    technical: "Let's look at what's driving the recent price action.",
+    risk: "Let me check the risk framing on this one.",
+    valuation: "Let me check what the fundamentals say.",
+    macro: "Let me check the macro backdrop.",
+    verdict: "Let me put that to the council - the math will answer, I'll narrate.",
+  };
+
   function ask() {
     if (busy) return;
     const manual = EnmaTickers.normalise(els.symInput.value);
@@ -245,10 +326,10 @@ const EnmaPanel = (() => {
     setSymbolChip(target);
     const query = els.q.value.trim();
     els.q.value = "";
+    session = {};
+    currentIntent = EnmaIntent.classify(query);
     if (query) line("dim", `you: ${query}`);
-    line("enma", query
-      ? "Let me put that to the council - the math will answer, I'll narrate."
-      : "Let me convene the council on this one.");
+    line("enma", ACK_BY_INTENT[currentIntent.category] || ACK_BY_INTENT.general);
     setBusy(true);
 
     const port = chrome.runtime.connect({ name: "enma-analyze" });

@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": ["*://*.tradingview.com/*"],
-      "js": ["src/tickers.js", "src/panel.js", "src/content.js"],
+      "js": ["src/tickers.js", "src/intent.js", "src/panel.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],
