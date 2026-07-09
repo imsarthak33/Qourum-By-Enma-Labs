@@ -20,6 +20,15 @@ from .risk import kelly_size
 from .weights import renormalise, uniform_weights
 
 
+def _finite(x: Any) -> float | None:
+    """NaN/inf (e.g. from a stale yfinance frame) must behave like *missing*,
+    not like a number — NaN passes `is not None` checks and then poisons every
+    downstream round()/int()/json step. One chokepoint, applied to all levels."""
+    if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x):
+        return float(x)
+    return None
+
+
 def log_opinion_pool(p_hats: dict[str, float], weights: dict[str, float]) -> float:
     """P(bull) = Π p_i^w_i / (Π p_i^w_i + Π (1-p_i)^w_i)   (07 §3.2).
 
@@ -66,9 +75,11 @@ def synthesize(
     weights = weights or uniform_weights()
 
     # 1. Calibrate each responding agent's raw probability (07 §3.1).
+    # A NaN probability is a failed model, not an opinion — exclude it exactly
+    # like a None (it would otherwise poison the whole opinion pool).
     p_hats: dict[str, float] = {}
     for agent, feat in features.items():
-        if feat.p_bull_raw is None:
+        if _finite(feat.p_bull_raw) is None:
             continue
         curve = curves.get(agent) or CalibrationCurve.identity(agent)
         p_hats[agent] = curve.apply(feat.p_bull_raw)
@@ -79,7 +90,7 @@ def synthesize(
     primary_agents = {"technician", "fundamentalist", "macro", "risk"}
     failed_primaries = [
         a for a in primary_agents
-        if a in features and features[a].p_bull_raw is None
+        if a in features and _finite(features[a].p_bull_raw) is None
     ]
     degraded = len(failed_primaries) > 0 or len(responding) < 3
 
@@ -87,13 +98,14 @@ def synthesize(
     w = renormalise(weights, responding) if responding else {}
     p_bull = log_opinion_pool(p_hats, w) if responding else 0.5
 
-    # 3. Levels come from the Risk Ranger's ATR model (07 §2.5).
+    # 3. Levels come from the Risk Ranger's ATR model (07 §2.5). Sanitised
+    # through _finite: a NaN level (stale data frame) is a MISSING level.
     risk_feat = features.get("risk")
     levels = risk_feat.features if (risk_feat and risk_feat.ok) else {}
-    entry = levels.get("entry")
-    stop = levels.get("stop")
-    target = levels.get("target")
-    daily_vol = levels.get("daily_vol", 0.02)
+    entry = _finite(levels.get("entry"))
+    stop = _finite(levels.get("stop"))
+    target = _finite(levels.get("target"))
+    daily_vol = _finite(levels.get("daily_vol")) or 0.02
 
     # 4. EV against the hurdle (07 §3.4). Sign-adjusted: if the pool leans
     # bear, evaluate the short side with mirrored levels.

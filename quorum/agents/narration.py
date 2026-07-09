@@ -5,6 +5,7 @@ every failure here degrades text, never numbers.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import Any
@@ -80,15 +81,18 @@ def _allowed_numbers(verdict_json: dict[str, Any]) -> set[str]:
     own numbers rendered a few common ways."""
     allowed: set[str] = set()
     def add(x: Any) -> None:
-        if isinstance(x, (int, float)) and x is not None:
+        if isinstance(x, (int, float)) and x is not None and not (isinstance(x, float) and math.isnan(x)):
             for fmt in ("{:.0f}", "{:.1f}", "{:.2f}", "{:.3f}", "{:.4f}", "{}"):
                 try:
                     allowed.add(fmt.format(x))
                 except (ValueError, TypeError):
                     pass
             if isinstance(x, float):
-                allowed.add(str(round(x * 100, 1)))     # percentage renderings
-                allowed.add(str(int(round(x * 100))))
+                try:
+                    allowed.add(str(round(x * 100, 1)))     # percentage renderings
+                    allowed.add(str(int(round(x * 100))))
+                except (ValueError, OverflowError):
+                    pass
     for v in verdict_json.values():
         if isinstance(v, dict):
             for vv in v.values():

@@ -192,3 +192,44 @@ class TestValidateLevels:
         assert validate_levels(v, {"low_52w": 80, "high_52w": 120})
         assert not validate_levels(v, {"low_52w": 300, "high_52w": 400})
         assert validate_levels(v, {})  # nothing to validate against
+
+
+class TestNaNResilience:
+    """Regression for the live crash (2026-07-10): stale yfinance frames handed
+    the Risk Ranger NaN levels; NaN passes `is not None`, reached
+    verdict.to_json(), and blew up narration's number-check with
+    `ValueError: cannot convert float NaN to integer`. NaN must mean MISSING."""
+
+    def test_nan_levels_become_none_and_json_stays_valid(self):
+        import json
+        features = {
+            "technician": _feat("technician", 0.5),
+            "fundamentalist": _feat("fundamentalist", 0.44),
+            "macro": _feat("macro", 0.36),
+            "risk": _risk_feat(entry=float("nan"), stop=float("nan"), target=float("nan")),
+        }
+        verdict, _, degraded = synthesize(features, _curves(), uniform_weights())
+        assert verdict.entry is None and verdict.stop is None and verdict.target is None
+        assert degraded is True  # missing levels = degraded path, honestly flagged
+        # allow_nan=False raises if any NaN survived anywhere in the payload —
+        # this is exactly what the SSE bridge / extension JSON.parse needs.
+        json.dumps(verdict.to_json(), allow_nan=False)
+
+    def test_nan_probability_excluded_like_a_failed_model(self):
+        features = {
+            "technician": _feat("technician", float("nan")),
+            "fundamentalist": _feat("fundamentalist", 0.6),
+            "macro": _feat("macro", 0.6),
+            "risk": _risk_feat(p=0.6),
+        }
+        verdict, p_hats, degraded = synthesize(features, _curves(), uniform_weights())
+        assert "technician" not in p_hats           # excluded, not aggregated
+        assert degraded is True                      # a failed primary = degraded
+        assert math.isfinite(verdict.p_bull_calibrated)
+
+    def test_narration_number_check_tolerates_nan_verdict_fields(self):
+        from quorum.agents.narration import narration_consistent
+        vjson = {"action": "WAIT", "entry": float("nan"), "edge": 0.081,
+                 "agent_weights": {"technician": float("nan")}}
+        # Must not raise; the check simply ignores non-finite fields.
+        assert narration_consistent("edge of 0.081 on this setup", vjson) is True
