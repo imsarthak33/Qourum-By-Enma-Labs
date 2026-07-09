@@ -39,6 +39,16 @@ def fetch_ohlcv(symbol: str, exchange: str = "NSE", period: str = "2y") -> pd.Da
             return None
         df = df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
         df.index = pd.to_datetime(df.index).tz_localize(None)
+        # yfinance occasionally hands back a trailing bar with NaN OHLC (an
+        # unsettled/incomplete session, e.g. mid-day or a data-lag on the
+        # provider's side) while the DataFrame itself is non-empty. Every
+        # downstream reader takes `.iloc[-1]` on trust, so a NaN tail silently
+        # poisons `last`, `return_1m`, and every ATR/entry level derived from
+        # it — better to drop unusable trailing rows here, once, than let
+        # every consumer defend against it.
+        df = df[df["close"].notna()]
+        if df.empty:
+            return None
         return df
     except Exception:  # noqa: BLE001 — degrade, don't raise (02_TRD §6)
         return None
@@ -75,7 +85,7 @@ def fetch_macro_factors(period: str = "1y") -> dict[str, pd.Series]:
             df = _yf().Ticker(ticker).history(period=period, interval="1d")
             if df is None or df.empty:
                 continue
-            s = df["Close"].pct_change().dropna()
+            s = df["Close"].pct_change(fill_method=None).dropna()
             s.index = pd.to_datetime(s.index).tz_localize(None)
             out[name] = s
         except Exception:  # noqa: BLE001
@@ -126,7 +136,7 @@ def build_fact_pack(symbol: str, exchange: str = "NSE") -> tuple[FactPack, dict[
             if len(close) > 21 else None,
             "rows": len(ohlcv),
         }
-        stock_returns = close.pct_change().dropna()
+        stock_returns = close.pct_change(fill_method=None).dropna()
         mom = momentum_12_1(ohlcv)
         if fundamentals is not None and mom is not None:
             fundamentals["mom_12_1"] = round(mom, 4)
