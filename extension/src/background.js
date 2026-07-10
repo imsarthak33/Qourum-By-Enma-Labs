@@ -12,6 +12,13 @@
 
 const BRIDGE = "http://127.0.0.1:8756";
 
+// Stale-code confusion has cost real debugging time twice now: the extension
+// tile and any already-open tab each cache their own copy of this code until
+// explicitly reloaded/refreshed, with no visible sign that's happened. This
+// line is the fastest way to check "is this actually the new build?" -
+// chrome://extensions -> Enma -> "service worker" (inspect) -> Console.
+console.log(`[Enma] service worker loaded - v${chrome.runtime.getManifest().version}`);
+
 // --- hotkey / toolbar toggle -> tell the active tab's panel ---------------
 async function toggleActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
