@@ -27,8 +27,9 @@ your machine, your data. **AI analysis, not investment advice.**
    - Chrome → `chrome://extensions` → enable **Developer mode**
    - **Load unpacked** → select this `extension/` folder
 
-3. Open a chart on [tradingview.com](https://www.tradingview.com) (e.g. NSE:RELIANCE)
-   and press **Ctrl+Shift+Q** (or click the Enma toolbar icon).
+3. Open a chart on [tradingview.com](https://www.tradingview.com) — NSE, BSE,
+   NASDAQ, and NYSE symbols all work (e.g. NSE:RELIANCE or NASDAQ:AAPL) — and
+   press **Ctrl+Shift+Q** (or click the Enma toolbar icon).
 
 4. Ask away — or just hit **Ask** for the full council read.
 
@@ -57,9 +58,17 @@ Enma: Let me put that to the council — the math will answer, I'll narrate.
 | Groww | — | PR welcome |
 | Angel One | — | PR welcome |
 
-Detection is a strategy list (`src/tickers.js`) — first valid NSE/BSE symbol
-wins, manual entry as the fallback. Adding a platform = one small strategy
-file + a manifest match pattern. Great first contribution.
+Detection is a strategy list (`src/tickers.js`) — first valid symbol on a
+**supported exchange** (`NSE`, `BSE`, `NASDAQ`, `NYSE`) wins, manual entry as
+the fallback. A recognised-but-unsupported exchange (e.g. LSE) is flagged
+plainly rather than guessed. Adding a platform = one small strategy file + a
+manifest match pattern. Great first contribution.
+
+**US-market support isn't a thin ticker unblock** — the Macro Oracle regresses
+against a market-specific factor set (S&P 500 / DXY / WTI for NASDAQ/NYSE vs.
+NIFTY / USDINR / Brent for NSE/BSE, see `quorum/data/adapters.py`'s
+`MACRO_TICKERS_BY_EXCHANGE`), so a NASDAQ verdict is computed against the
+right market, not silently against India's.
 
 ## Architecture (why the service worker does the fetching)
 

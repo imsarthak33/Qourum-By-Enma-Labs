@@ -16,12 +16,36 @@ import pandas as pd
 
 from ..models import FactPack
 
-YF_SUFFIX = {"NSE": ".NS", "BSE": ".BO"}
+YF_SUFFIX = {"NSE": ".NS", "BSE": ".BO", "NASDAQ": "", "NYSE": ""}
 
-MACRO_TICKERS = {
-    "market": "^NSEI",       # NIFTY 50
-    "usdinr": "USDINR=X",
-    "oil": "BZ=F",           # Brent
+# Macro factor set is exchange-specific, not a global constant: NIFTY/USDINR/
+# Brent are only meaningful regressors for an NSE/BSE-listed stock. Feeding
+# NIFTY's moves into the Macro Oracle's regression for a NASDAQ stock would
+# be silently WRONG, not just less accurate - macro.py's regression itself is
+# fully generic over whatever `factor_returns` dict it's handed (07 §2.3);
+# only the choice of WHICH tickers to fetch is market-specific, so that's the
+# one thing that needs to branch on exchange.
+MACRO_TICKERS_BY_EXCHANGE: dict[str, dict[str, str]] = {
+    "NSE": {
+        "market": "^NSEI",       # NIFTY 50
+        "usdinr": "USDINR=X",
+        "oil": "BZ=F",           # Brent
+    },
+    "BSE": {
+        "market": "^NSEI",
+        "usdinr": "USDINR=X",
+        "oil": "BZ=F",
+    },
+    "NASDAQ": {
+        "market": "^GSPC",       # S&P 500
+        "dxy": "DX-Y.NYB",       # US Dollar Index
+        "oil": "CL=F",           # WTI
+    },
+    "NYSE": {
+        "market": "^GSPC",
+        "dxy": "DX-Y.NYB",
+        "oil": "CL=F",
+    },
 }
 
 
@@ -77,10 +101,13 @@ def fetch_fundamentals(symbol: str, exchange: str = "NSE") -> dict[str, Any] | N
         return None
 
 
-def fetch_macro_factors(period: str = "1y") -> dict[str, pd.Series]:
-    """Daily pct-change series per macro factor; missing factors are dropped."""
+def fetch_macro_factors(exchange: str = "NSE", period: str = "1y") -> dict[str, pd.Series]:
+    """Daily pct-change series per macro factor for `exchange`'s market;
+    missing factors are dropped. Unknown exchanges fall back to the NSE set
+    rather than fetching nothing, matching the FactPack default."""
+    tickers = MACRO_TICKERS_BY_EXCHANGE.get(exchange, MACRO_TICKERS_BY_EXCHANGE["NSE"])
     out: dict[str, pd.Series] = {}
-    for name, ticker in MACRO_TICKERS.items():
+    for name, ticker in tickers.items():
         try:
             df = _yf().Ticker(ticker).history(period=period, interval="1d")
             if df is None or df.empty:
@@ -119,7 +146,7 @@ def build_fact_pack(symbol: str, exchange: str = "NSE") -> tuple[FactPack, dict[
     fundamentals = fetch_fundamentals(symbol, exchange)
     sources["fundamentals"] = "ok" if fundamentals else "missing"
 
-    macro_factors = fetch_macro_factors()
+    macro_factors = fetch_macro_factors(exchange)
     sources["macro"] = "ok" if macro_factors else "missing"
     sources["flows"] = "missing"      # FII/DII: no free API — reduced factor set
     sources["catalysts"] = "missing"  # earnings calendar: not wired yet

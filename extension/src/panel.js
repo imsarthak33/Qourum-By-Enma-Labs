@@ -345,7 +345,7 @@ const EnmaPanel = (() => {
     if (detected && detected.unsupported) {
       els.symRow.classList.add("show");
       line("warn", `This looks like a ${detected.exchange} listing - Quorum currently only `
-        + "covers NSE/BSE. Type an NSE/BSE ticker below if you meant a different stock.");
+        + "covers NSE/BSE/NASDAQ/NYSE. Type a ticker on one of those below if you meant a different stock.");
       return;
     }
     const target = manual || detected;
@@ -453,7 +453,7 @@ const EnmaPanel = (() => {
       document.documentElement.appendChild(root);
       if (t && t.unsupported) {
         line("enma", `Hey - this looks like a ${t.exchange} listing. I currently only cover `
-          + "NSE/BSE stocks, sorry. Type an NSE/BSE ticker below if you meant a different one.");
+          + "NSE/BSE/NASDAQ/NYSE, sorry. Type a ticker on one of those below if you meant a different one.");
         els.symRow.classList.add("show");
       } else if (t) {
         line("enma", `Hey - I can see ${t.symbol} on screen. Ask me anything about it, or just hit Ask for the full council read.`);

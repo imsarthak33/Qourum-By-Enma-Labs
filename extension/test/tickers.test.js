@@ -1,11 +1,14 @@
 // Plain-node regression test for ticker detection (no build step, no deps -
 // matches the extension's zero-tooling install story). Run: node test/tickers.test.js
 //
-// Regression (live bug, 2026-07-10): visiting a NASDAQ page produced
-// {symbol:"NASDAQ-SPCX", exchange:"NSE"} - a fabricated ticker sent straight
-// to the backend, which Quorum can't serve (NSE/BSE only) and which
-// contributed to a silent "frozen" panel. detect() must recognise a
-// structurally-known non-NSE/BSE exchange and stop, not guess.
+// Regression (live bug, 2026-07-10): visiting a page on an exchange Quorum
+// couldn't yet serve produced a fabricated ticker sent straight to the
+// backend instead of a clear "unsupported" signal. detect() must recognise a
+// structurally-known unsupported exchange and stop, not guess. NASDAQ/NYSE
+// were added to the supported set once the Macro Oracle got a matching US
+// factor set (quorum/data/adapters.py's MACRO_TICKERS_BY_EXCHANGE) - the
+// "unsupported" mechanism itself is still covered here using an exchange
+// that remains genuinely out of scope (LSE).
 
 const fs = require("fs");
 const path = require("path");
@@ -40,15 +43,21 @@ function check(name, actual, expected) {
 }
 
 check(
-  "NASDAQ path is confidently rejected, not fabricated as NSE",
+  "NASDAQ path now resolves (US market model added)",
   loadTickers({ pathname: "/symbols/NASDAQ-SPCX/", search: "" }, { title: "SPCX" }).detect(),
-  { unsupported: true, exchange: "NASDAQ" }
+  { symbol: "SPCX", exchange: "NASDAQ" }
 );
 
 check(
-  "NYSE query param is confidently rejected",
+  "NYSE query param now resolves (US market model added)",
   loadTickers({ pathname: "/chart/abc/", search: "?symbol=NYSE%3AAAPL" }, { title: "AAPL" }).detect(),
-  { unsupported: true, exchange: "NYSE" }
+  { symbol: "AAPL", exchange: "NYSE" }
+);
+
+check(
+  "a still-genuinely-unsupported exchange is confidently rejected, not fabricated",
+  loadTickers({ pathname: "/symbols/LSE-VOD/", search: "" }, { title: "VOD" }).detect(),
+  { unsupported: true, exchange: "LSE" }
 );
 
 check(
@@ -100,8 +109,18 @@ check(
   const loc = { pathname: "/chart/", search: "?symbol=NSE%3ARELIANCE" };
   check(
     "legend catches an unsupported exchange even when the URL still says NSE",
+    loadTickers(loc, docWithLegend("VOD 75.20 ▲ +0.5%", "LSE")).detect(),
+    { unsupported: true, exchange: "LSE" }
+  );
+}
+
+{
+  // And correctly resolves a live in-app swap TO a now-supported exchange.
+  const loc = { pathname: "/chart/", search: "?symbol=NSE%3ARELIANCE" };
+  check(
+    "legend resolves a live swap to NASDAQ correctly",
     loadTickers(loc, docWithLegend("AAPL 210.00 ▲ +0.5%", "NASDAQ")).detect(),
-    { unsupported: true, exchange: "NASDAQ" }
+    { symbol: "AAPL", exchange: "NASDAQ" }
   );
 }
 

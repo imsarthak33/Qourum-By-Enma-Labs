@@ -14,8 +14,12 @@
 // KNOW the exchange and it isn't NSE/BSE - stop guessing immediately).
 
 const EnmaTickers = (() => {
-  const VALID = /^[A-Z][A-Z0-9&-]{0,19}$/; // NSE/BSE symbol shape, e.g. RELIANCE, M&M, BAJAJ-AUTO
-  const EXCHANGES = new Set(["NSE", "BSE"]);
+  const VALID = /^[A-Z][A-Z0-9&-]{0,19}$/; // NSE/BSE/NASDAQ/NYSE symbol shape, e.g. RELIANCE, M&M, AAPL
+  // Exchanges Quorum can actually run a correct debate for - the Macro
+  // Oracle needs a matching factor set (quorum/data/adapters.py's
+  // MACRO_TICKERS_BY_EXCHANGE), not just a price feed. Anything else is
+  // still confidently flagged {unsupported} rather than guessed.
+  const EXCHANGES = new Set(["NSE", "BSE", "NASDAQ", "NYSE"]);
 
   function validSymbol(s) {
     return VALID.test(s) ? s : null;
