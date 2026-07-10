@@ -358,7 +358,12 @@ const EnmaPanel = (() => {
     const header = h("header");
     const orb = h("span", "orb");
     const title = h("b", "", "Enma");
-    const sub = h("span", "sub", "math decides - Enma narrates");
+    // Version in the header: stale-code confusion (extension reloaded but the
+    // tab's injected scripts not refreshed, or vice versa) is invisible
+    // otherwise - this makes "which code is this tab actually running?"
+    // answerable at a glance.
+    const ver = chrome.runtime.getManifest().version;
+    const sub = h("span", "sub", `math decides - Enma narrates - v${ver}`);
     const chip = h("span", "chip", "no ticker");
     const close = h("button", "close", "x");
     close.addEventListener("click", toggle);

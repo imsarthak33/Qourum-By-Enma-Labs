@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Enma - Quorum council overlay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ask Enma about the stock on screen. Enma convenes the Quorum council via your LOCAL quorum serve - math decides, Enma narrates. Self-hosted; AI analysis, not investment advice.",
   "permissions": [],
   "host_permissions": [
