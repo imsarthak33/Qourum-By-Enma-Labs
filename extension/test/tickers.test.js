@@ -18,6 +18,20 @@ function loadTickers(loc, doc) {
   return eval(src + "; EnmaTickers");
 }
 
+// Minimal stub for a TradingView chart page's live legend widget, matching
+// what a real page returns for `document.querySelector(...)`.
+function docWithLegend(titleText, exchangeText) {
+  return {
+    title: titleText,
+    querySelector(sel) {
+      if (sel === '[data-qa-id="title-wrapper legend-source-exchange"]') {
+        return exchangeText == null ? null : { textContent: exchangeText };
+      }
+      return null;
+    },
+  };
+}
+
 let passed = 0;
 function check(name, actual, expected) {
   assert.deepStrictEqual(actual, expected);
@@ -64,6 +78,42 @@ check(
 {
   const T = loadTickers({ pathname: "/", search: "" }, { title: "x" });
   check("manual-entry normalise() unaffected", T.normalise("nse:infy"), { symbol: "INFY", exchange: "NSE" });
+}
+
+// --- Live-bug regression (2026-07-10): switching the active chart symbol
+// via TradingView's own in-app picker left location.search reading a STALE
+// "NSE:RELIANCE" while document.title (and the legend exchange badge)
+// correctly tracked "INFY" - confirmed by driving a real TradingView chart.
+// Enma kept reporting the old ticker no matter what was actually on screen.
+{
+  const staleLoc = { pathname: "/chart/", search: "?symbol=NSE%3ARELIANCE" };
+  check(
+    "live legend beats a stale URL query param after an in-app symbol swap",
+    loadTickers(staleLoc, docWithLegend("INFY 1,068.00 ▲ +1.64%", "NSE")).detect(),
+    { symbol: "INFY", exchange: "NSE" }
+  );
+}
+
+{
+  // Legend also catches a genuinely unsupported exchange, live-synced -
+  // titleStrategy alone could never know this, only the exchange badge can.
+  const loc = { pathname: "/chart/", search: "?symbol=NSE%3ARELIANCE" };
+  check(
+    "legend catches an unsupported exchange even when the URL still says NSE",
+    loadTickers(loc, docWithLegend("AAPL 210.00 ▲ +0.5%", "NASDAQ")).detect(),
+    { unsupported: true, exchange: "NASDAQ" }
+  );
+}
+
+{
+  // On page types with no legend widget (e.g. /symbols/... static pages),
+  // legendStrategy must no-op and defer to the URL strategy, not break it.
+  const loc = { pathname: "/symbols/NSE-RELIANCE/financials-overview/", search: "" };
+  check(
+    "no legend on screen -> falls through to the URL path strategy",
+    loadTickers(loc, docWithLegend("x", null)).detect(),
+    { symbol: "RELIANCE", exchange: "NSE" }
+  );
 }
 
 console.log(`\n${passed}/${passed} passed`);

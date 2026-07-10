@@ -54,6 +54,36 @@ const EnmaTickers = (() => {
   }
 
   // -- TradingView strategies, most reliable first ---------------------------
+
+  // Live bug (confirmed 2026-07-10 by driving an actual TradingView chart):
+  // on /chart/ pages, `?symbol=` is only a deep-link hint set at INITIAL
+  // load. Swapping the active symbol via TradingView's own in-app picker
+  // (exactly what a user does while Enma stays open) does NOT update it -
+  // switching RELIANCE -> INFY left location.search reading stale
+  // "NSE:RELIANCE" while the page's own legend widget updated correctly.
+  // That's why Enma kept reporting the old ticker no matter what was
+  // actually on screen.
+  //
+  // TradingView's chart legend carries the live symbol via a stable,
+  // semantically-named `data-qa-id="title-wrapper legend-source-exchange"`
+  // badge (a QA automation hook - far less likely to be renamed on a routine
+  // visual refactor than the hashed CSS module classnames nearby), and
+  // `document.title`'s first token is empirically the live ticker code
+  // itself (not the company name), confirmed to update in lockstep with the
+  // legend. Together they give a fully live-synced {symbol, exchange} - and
+  // still catch a genuinely unsupported exchange via fromExchangePair,
+  // unlike title alone. On page types without this legend (e.g. the
+  // /symbols/... static overview pages) the selector simply finds nothing
+  // and this strategy no-ops, deferring to the URL strategies below, which
+  // ARE reliable there (a full navigation happens per symbol on those pages).
+  function legendStrategy() {
+    const exchangeEl = document.querySelector('[data-qa-id="title-wrapper legend-source-exchange"]');
+    const exchange = exchangeEl?.textContent?.trim();
+    const tickerFromTitle = (document.title || "").split(/[\s|]/)[0];
+    if (!exchange || !tickerFromTitle) return null;
+    return fromExchangePair(exchange, tickerFromTitle);
+  }
+
   function urlParamStrategy() {
     // https://www.tradingview.com/chart/XXXX/?symbol=NSE%3ARELIANCE
     const raw = new URLSearchParams(location.search).get("symbol");
@@ -80,7 +110,7 @@ const EnmaTickers = (() => {
   }
 
   function detect() {
-    for (const strat of [urlParamStrategy, urlPathStrategy, titleStrategy]) {
+    for (const strat of [legendStrategy, urlParamStrategy, urlPathStrategy, titleStrategy]) {
       let candidate = null;
       try {
         candidate = strat();
