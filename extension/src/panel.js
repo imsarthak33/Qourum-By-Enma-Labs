@@ -115,6 +115,31 @@ const EnmaPanel = (() => {
   let session = {};
   let currentIntent = { category: "general" };
 
+  // Live bug: typing into Enma's input on a TradingView CHART page (not the
+  // overview/detail pages) leaked every keystroke into TradingView's own
+  // "type anywhere to jump to symbol search" overlay. TradingView almost
+  // certainly registers that as a CAPTURE-phase keydown listener on
+  // `document` - capture listeners on an ancestor fire BEFORE the event
+  // reaches our shadow-DOM input, so the per-input e.stopPropagation() calls
+  // below (bubble phase) run structurally too late to stop it; by the time
+  // our input sees the keystroke, TradingView's document-capture handler has
+  // already acted on it.
+  //
+  // `window` is the earliest possible point in the capture phase - a capture
+  // listener registered there always runs before one on `document`,
+  // regardless of which script loaded first. `root` (the shadow host) is a
+  // normal light-DOM node, so a listener outside a CLOSED shadow root still
+  // sees `event.target` correctly retargeted to it when the keystroke
+  // originated inside - no need to reach into the shadow tree at all.
+  function isEnmaEvent(e) {
+    if (!root) return false;
+    if (e.target === root) return true;
+    return typeof e.composedPath === "function" && e.composedPath().includes(root);
+  }
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    window.addEventListener(type, (e) => { if (isEnmaEvent(e)) e.stopPropagation(); }, true);
+  }
+
   // Each builder returns a string made ONLY from fields already present in
   // session[agent] (populated verbatim from feature_ready/agent_done) or the
   // verdict payload - selection + phrasing, never a new number (doc 08 par.4).
