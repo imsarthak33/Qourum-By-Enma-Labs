@@ -61,12 +61,31 @@ chrome.runtime.onConnect.addListener((port) => {
     if (msg.query) params.set("query", msg.query);
     if (msg.exchange) params.set("exchange", msg.exchange);
 
+    // Live symptom this guards against: a hung/very-slow request left the
+    // panel showing "busy" forever with no error - build_fact_pack does
+    // several SEQUENTIAL yfinance calls (ohlcv, fundamentals, 3x macro
+    // factors) before the engine emits its next event, so a slow network or
+    // a bad symbol can go quiet for a while with zero intermediate progress.
+    // This is an IDLE timeout (resets on every byte received, including
+    // response headers), not a flat cap, so a legitimately slow-but-working
+    // debate is never cut off mid-stream - only true silence trips it.
+    const IDLE_TIMEOUT_MS = 45000;
+    let idleTimer;
+    let timedOut = false;
+    const armIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { timedOut = true; abort.abort(); }, IDLE_TIMEOUT_MS);
+    };
+
     try {
+      armIdleTimer();
       const res = await fetch(`${BRIDGE}/analyze?${params}`, {
         signal: abort.signal,
         headers: { Accept: "text/event-stream" },
       });
+      armIdleTimer(); // headers arrived; reset the clock for the body
       if (!res.ok) {
+        clearTimeout(idleTimer);
         const detail = await res.json().catch(() => ({}));
         port.postMessage({
           type: "bridge-error",
@@ -86,11 +105,23 @@ chrome.runtime.onConnect.addListener((port) => {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        armIdleTimer(); // any byte is forward progress; push the deadline out
         parse(decoder.decode(value, { stream: true }));
       }
+      clearTimeout(idleTimer);
       port.postMessage({ type: "stream-end" });
     } catch (err) {
-      if (abort.signal.aborted) return;
+      clearTimeout(idleTimer);
+      if (abort.signal.aborted && !timedOut) return; // panel closed intentionally
+      if (timedOut) {
+        port.postMessage({
+          type: "bridge-error",
+          message: `The council went quiet for ${IDLE_TIMEOUT_MS / 1000}s+ and I stopped waiting - `
+            + "the symbol may be invalid or a data source is slow. Check the quorum serve "
+            + "terminal, or try again.",
+        });
+        return;
+      }
       port.postMessage({
         type: "bridge-error",
         message:

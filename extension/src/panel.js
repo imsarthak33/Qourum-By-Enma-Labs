@@ -316,7 +316,13 @@ const EnmaPanel = (() => {
   function ask() {
     if (busy) return;
     const manual = EnmaTickers.normalise(els.symInput.value);
-    const detected = EnmaTickers.detect();
+    const detected = manual ? null : EnmaTickers.detect();
+    if (detected && detected.unsupported) {
+      els.symRow.classList.add("show");
+      line("warn", `This looks like a ${detected.exchange} listing - Quorum currently only `
+        + "covers NSE/BSE. Type an NSE/BSE ticker below if you meant a different stock.");
+      return;
+    }
     const target = manual || detected;
     if (!target) {
       els.symRow.classList.add("show");
@@ -343,7 +349,8 @@ const EnmaPanel = (() => {
   }
 
   function setSymbolChip(t) {
-    els.chip.textContent = t ? `${t.exchange}:${t.symbol}` : "no ticker";
+    if (t && t.unsupported) els.chip.textContent = `${t.exchange} (unsupported)`;
+    else els.chip.textContent = t ? `${t.exchange}:${t.symbol}` : "no ticker";
   }
 
   // ---- mount / toggle -------------------------------------------------------
@@ -419,10 +426,16 @@ const EnmaPanel = (() => {
       const t = EnmaTickers.detect();
       setSymbolChip(t);
       document.documentElement.appendChild(root);
-      line("enma", t
-        ? `Hey - I can see ${t.symbol} on screen. Ask me anything about it, or just hit Ask for the full council read.`
-        : "Hey - I couldn't auto-read a ticker here. Type one below and ask away.");
-      if (!t) els.symRow.classList.add("show");
+      if (t && t.unsupported) {
+        line("enma", `Hey - this looks like a ${t.exchange} listing. I currently only cover `
+          + "NSE/BSE stocks, sorry. Type an NSE/BSE ticker below if you meant a different one.");
+        els.symRow.classList.add("show");
+      } else if (t) {
+        line("enma", `Hey - I can see ${t.symbol} on screen. Ask me anything about it, or just hit Ask for the full council read.`);
+      } else {
+        line("enma", "Hey - I couldn't auto-read a ticker here. Type one below and ask away.");
+        els.symRow.classList.add("show");
+      }
     } else {
       document.documentElement.appendChild(root);
       const t = EnmaTickers.detect();
