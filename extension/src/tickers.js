@@ -1,6 +1,7 @@
-// Ticker detection - strategy list, first valid symbol wins (doc 00 P0 risk
-// flag / doc 08 par.5). E0 ships TradingView only; Kite/Groww/Angel One are
-// known-fragile follow-ups and natural first PRs (doc 00 par.A4).
+// Ticker detection - per-host strategy list, first valid symbol wins (doc 00
+// P0 risk flag / doc 08 par.5). E1: TradingView + Kite (Zerodha) web.
+// Groww/Angel One remain natural first PRs (doc 00 par.A4) - copy the Kite
+// pattern: ground every selector in the site's real DOM/bundle, never guess.
 //
 // Quorum only covers NSE/BSE (quorum/data/adapters.py's YF_SUFFIX has no
 // entry for anything else) - so a strategy that structurally KNOWS the
@@ -113,8 +114,65 @@ const EnmaTickers = (() => {
     return first && first.length >= 2 ? normalise(first) : null;
   }
 
+  // -- Kite (Zerodha) strategies ----------------------------------------------
+  //
+  // Every selector here is verified against Kite web's own shipped bundle
+  // (the public kite-demo.zerodha.com instance's main.*.js Vue templates and
+  // router constants, inspected 2026-07-11), not guessed from memory:
+  //
+  //  - Chart windows are the route "/chart/ext/ciq/:segment/:tradingsymbol/
+  //    :token" (a tvc variant and /beta children exist alongside) - the
+  //    segment slot is structurally the exchange, same guarantee as
+  //    TradingView's URL conventions.
+  //  - Marketwatch rows are `.instrument` items; the current one carries
+  //    `.selected` (Kite's own keyboard/click position) or
+  //    `.active-marketdepth` (depth pane expanded). The symbol lives in
+  //    `span.nice-name`; the exchange renders as a sibling `.tags .tag` ONLY
+  //    when it isn't one of Kite's defaults (showExchange() hides
+  //    NSE/NFO/CDS/INDICES) - so "no tag" means NSE for anything shaped like
+  //    an equity symbol. Non-tradable rows always carry an INDEX tag and are
+  //    rejected here explicitly: "SENSEX" would otherwise pass the symbol
+  //    regex and fabricate an NSE:SENSEX debate. Derivatives' spaced nice
+  //    names ("NIFTY 25JUL FUT") fail the symbol shape on their own and fall
+  //    through to manual entry.
+
+  function kiteChartStrategy() {
+    const m = location.pathname.match(
+      /^\/chart\/ext\/[a-z]+(?:\/beta)?\/([A-Za-z]+)\/([^/]+)\/\d+/
+    );
+    return m ? fromExchangePair(m[1], m[2]) : null;
+  }
+
+  function kiteWatchStrategy() {
+    const sidebar = document.querySelector(".marketwatch-sidebar");
+    if (!sidebar) return null;
+    const row = sidebar.querySelector(".instrument.selected")
+      || sidebar.querySelector(".instrument.active-marketdepth");
+    if (!row) return null;
+    const name = row.querySelector(".nice-name")?.textContent?.trim();
+    if (!name) return null;
+    const tags = Array.from(row.querySelectorAll(".tags .tag"),
+                            (t) => (t.textContent || "").trim().toUpperCase());
+    if (tags.includes("INDEX")) return null; // indices aren't debatable tickers
+    const exchange = tags.find((t) => t && t !== "EVENT");
+    return fromExchangePair(exchange || "NSE", name);
+  }
+
+  // -- host routing ------------------------------------------------------------
+  // Strategies are strictly per-host: TradingView's title fallback running on
+  // Kite would read the site's own name ("Kite - Zerodha's...") as an NSE
+  // ticker KITE - the same fabrication bug class the {unsupported} shape
+  // exists to prevent. An unmatched host gets NO strategies and lands on
+  // manual entry, never a guess.
+  const HOST_STRATEGIES = [
+    [/(^|\.)tradingview\.com$/, [legendStrategy, urlParamStrategy, urlPathStrategy, titleStrategy]],
+    [/^kite(-demo)?\.zerodha\.com$/, [kiteChartStrategy, kiteWatchStrategy]],
+  ];
+
   function detect() {
-    for (const strat of [legendStrategy, urlParamStrategy, urlPathStrategy, titleStrategy]) {
+    const host = String(location.hostname || "");
+    const entry = HOST_STRATEGIES.find(([re]) => re.test(host));
+    for (const strat of entry ? entry[1] : []) {
       let candidate = null;
       try {
         candidate = strat();

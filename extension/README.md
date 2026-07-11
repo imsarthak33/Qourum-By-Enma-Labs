@@ -2,7 +2,7 @@
 
 Ask Enma about the stock on your screen. Enma detects the ticker, convenes the
 **Quorum council** running on *your* machine, and narrates the computed verdict
-— live, in a panel on top of TradingView.
+— live, in a panel on top of TradingView or Kite (Zerodha) web.
 
 **Enma is the face; Quorum is the brain.** Every probability, level, weight,
 and the verdict itself is computed by Quorum's deterministic Quant Core. Enma
@@ -27,9 +27,10 @@ your machine, your data. **AI analysis, not investment advice.**
    - Chrome → `chrome://extensions` → enable **Developer mode**
    - **Load unpacked** → select this `extension/` folder
 
-3. Open a chart on [tradingview.com](https://www.tradingview.com) — NSE, BSE,
-   NASDAQ, and NYSE symbols all work (e.g. NSE:RELIANCE or NASDAQ:AAPL) — and
-   press **Ctrl+Shift+Q** (or click the Enma toolbar icon).
+3. Open a chart on [tradingview.com](https://www.tradingview.com), or your
+   marketwatch/chart on [kite.zerodha.com](https://kite.zerodha.com) — NSE,
+   BSE, NASDAQ, and NYSE symbols all work (e.g. NSE:RELIANCE or NASDAQ:AAPL) —
+   and press **Ctrl+Shift+Q** (or click the Enma toolbar icon).
 
 4. Ask away — or just hit **Ask** for the full council read.
 
@@ -53,10 +54,15 @@ Enma: Let me put that to the council — the math will answer, I'll narrate.
 
 | Platform | Ticker detection | Status |
 |---|---|---|
-| TradingView | URL param → URL path → title | ✅ E0 |
-| Kite (Zerodha) | — | PR welcome |
+| TradingView | live legend → URL param → URL path → title | ✅ E0 |
+| Kite (Zerodha) | chart-window URL → selected marketwatch row | ✅ E1 |
 | Groww | — | PR welcome |
 | Angel One | — | PR welcome |
+
+On Kite, Enma reads the **selected** marketwatch row (or the one with the
+depth pane open) and any chart window. Indices and derivatives are declined
+honestly — the council debates equities. Detection strategies are strictly
+per-host: an unrecognised page never guesses, it offers manual entry.
 
 Detection is a strategy list (`src/tickers.js`) — first valid symbol on a
 **supported exchange** (`NSE`, `BSE`, `NASDAQ`, `NYSE`) wins, manual entry as
