@@ -32,7 +32,10 @@ your machine, your data. **AI analysis, not investment advice.**
    BSE, NASDAQ, and NYSE symbols all work (e.g. NSE:RELIANCE or NASDAQ:AAPL) —
    and press **Ctrl+Shift+Q** (or click the Enma toolbar icon).
 
-4. Ask away — or just hit **Ask** for the full council read.
+4. Ask away — or just hit **Ask** for the full council read. New to a name?
+   Paste a watchlist in the **Roast** box (`+RELIANCE NASDAQ:AAPL -TCS`) for an
+   instant read on the whole set plus your "trading DNA" — `+` means you're
+   long it, `-` short, neither just watching.
 
 ## What you'll see
 
@@ -79,8 +82,14 @@ right market, not silently against India's.
 ## Architecture (why the service worker does the fetching)
 
 ```
-panel (Shadow DOM, page) ──Port──► service worker ──fetch/SSE──► quorum serve (127.0.0.1)
+panel (Shadow DOM, page) ──Port──► service worker ──fetch──► quorum serve (127.0.0.1)
+                                       │  "enma-analyze" → GET /analyze  (SSE, streamed)
+                                       └  "enma-roast"   → GET /roast    (one JSON reply)
 ```
+
+The roast is quant-only (no LLM narration) and computed in one shot, so it's a
+single JSON reply rather than a stream; a full debate streams the council's
+progress as it resolves.
 
 `quorum serve`'s CORS gate only trusts `chrome-extension://` origins, so a
 random web page can never drive your council or burn your API quota. Content

@@ -138,3 +138,49 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
 });
+
+// One watchlist roast per Port. The panel opens "enma-roast" and sends
+// {symbols: "+RELIANCE,NASDAQ:AAPL,-TCS"}; the bridge replies with one JSON
+// body (roast is quant-only and computed in a single shot, not streamed).
+// Same reason as /analyze the service worker does the fetch: a content-script
+// fetch carries the page origin, which quorum serve's CORS gate refuses.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "enma-roast") return;
+  const abort = new AbortController();
+  port.onDisconnect.addListener(() => abort.abort());
+
+  port.onMessage.addListener(async (msg) => {
+    // A roast fetches one fact pack per name (concurrently, server-side); a big
+    // watchlist can legitimately take a while, so the cap is generous. It's a
+    // flat timeout, not idle - a single JSON reply has no intermediate bytes.
+    const timer = setTimeout(() => abort.abort(), 90000);
+    // encodeURIComponent so the +/- side markers survive - a bare + in a query
+    // string decodes to a space and the long/short marker would be lost.
+    const url = `${BRIDGE}/roast?symbols=${encodeURIComponent(msg.symbols || "")}`;
+    try {
+      const res = await fetch(url, {
+        signal: abort.signal,
+        headers: { Accept: "application/json" },
+      });
+      clearTimeout(timer);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        port.postMessage({ type: "bridge-error",
+                           message: body.error || `bridge answered ${res.status}` });
+        return;
+      }
+      port.postMessage({ type: "roast-result", payload: body });
+    } catch (err) {
+      clearTimeout(timer);
+      if (abort.signal.aborted && err?.name === "AbortError") {
+        port.postMessage({ type: "bridge-error",
+                           message: "The roast took too long and I stopped waiting - "
+                             + "try fewer names, or check the quorum serve terminal." });
+        return;
+      }
+      port.postMessage({ type: "bridge-error",
+                         message: "Can't reach the local council bridge. Start it with:  "
+                           + "quorum serve" + (err?.message ? `  (${err.message})` : "") });
+    }
+  });
+});

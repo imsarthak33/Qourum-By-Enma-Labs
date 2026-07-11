@@ -29,6 +29,29 @@ async def _boom_analyze(symbol, on_event=None, **_):
     raise RuntimeError("feature model exploded")
 
 
+class _FakeRoastResult:
+    """Mirrors quorum.roast.RoastResult.to_json without the quant core."""
+    def __init__(self, entries):
+        self.entries = entries
+
+    def to_json(self):
+        return {
+            "archetype": "The Mixed Book - no single tell dominates yet.",
+            "tells": [f"read {len(self.entries)} names"],
+            "reads": [{"symbol": sym, "exchange": exch, "side": side, "ok": True,
+                       "error": None, "action": "WAIT", "p_bull": 0.5, "edge": 0.0}
+                      for (exch, sym, side) in self.entries],
+        }
+
+
+def _fake_roast(entries, config=None):
+    return _FakeRoastResult(entries)
+
+
+def _boom_roast(entries, config=None):
+    raise RuntimeError("roast blew up")
+
+
 def _parse_sse(text: str) -> list[tuple[str, str]]:
     frames = []
     for block in text.split("\n\n"):
@@ -49,8 +72,9 @@ def serve():
     """Start bridge servers on ephemeral ports; tear them all down after."""
     started: list[Any] = []
 
-    def _start(analyze_fn=_fake_analyze, **kw):
-        srv = build_server(host="127.0.0.1", port=0, analyze_fn=analyze_fn, **kw)
+    def _start(analyze_fn=_fake_analyze, roast_fn=_fake_roast, **kw):
+        srv = build_server(host="127.0.0.1", port=0, analyze_fn=analyze_fn,
+                           roast_fn=roast_fn, **kw)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         started.append(srv)
         return f"http://127.0.0.1:{srv.server_address[1]}"
@@ -145,3 +169,55 @@ def test_compute_error_becomes_error_event(serve):
     assert frames[0][0] == "debate_start"
     assert frames[-1][0] == "error"
     assert "exploded" in frames[-1][1]
+
+
+# --- /roast route (growth plan Horizon 1: watchlist roast in the overlay) ----
+
+def test_roast_returns_json_reads_and_dna(serve):
+    base = serve()
+    # params= percent-encodes, so the +/- side markers survive (a bare + in a
+    # query string decodes to a space - callers must encodeURIComponent).
+    r = httpx.get(base + "/roast",
+                  params={"symbols": "+RELIANCE,NASDAQ:AAPL,-TCS"}, timeout=5)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/json"
+    body = r.json()
+    # Entries parsed with side + exchange, order preserved.
+    assert [x["symbol"] for x in body["reads"]] == ["RELIANCE", "AAPL", "TCS"]
+    assert [x["side"] for x in body["reads"]] == [1, 0, -1]
+    assert body["reads"][1]["exchange"] == "NASDAQ"
+    assert body["archetype"] and isinstance(body["tells"], list)
+
+
+def test_roast_whitespace_separated_also_works(serve):
+    base = serve()
+    r = httpx.get(base + "/roast", params={"symbols": "RELIANCE INFY"}, timeout=5)
+    assert [x["symbol"] for x in r.json()["reads"]] == ["RELIANCE", "INFY"]
+
+
+def test_roast_missing_symbols_is_400(serve):
+    base = serve()
+    r = httpx.get(base + "/roast", timeout=5)
+    assert r.status_code == 400
+    assert "symbols" in r.json()["error"]
+
+
+def test_roast_error_becomes_500_not_traceback(serve):
+    base = serve(roast_fn=_boom_roast)
+    r = httpx.get(base + "/roast?symbols=RELIANCE", timeout=5)
+    assert r.status_code == 500
+    assert r.json()["error"] == "roast blew up"
+
+
+def test_roast_is_token_gated(serve):
+    base = serve(token="s3cret")
+    assert httpx.get(base + "/roast?symbols=RELIANCE", timeout=5).status_code == 401
+    ok = httpx.get(base + "/roast?symbols=RELIANCE&token=s3cret", timeout=5)
+    assert ok.status_code == 200
+
+
+def test_roast_cors_extension_only(serve):
+    base = serve()
+    r = httpx.get(base + "/roast?symbols=RELIANCE",
+                  headers={"Origin": "chrome-extension://abcdef"}, timeout=5)
+    assert r.headers.get("access-control-allow-origin") == "chrome-extension://abcdef"

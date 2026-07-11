@@ -112,6 +112,20 @@ const EnmaPanel = (() => {
     button.ask:disabled { opacity: .5; cursor: default; }
     .symrow { margin-top: 8px; display: none; }
     .symrow.show { display: flex; }
+    .roastrow { margin-top: 8px; }
+    button.roast {
+      background: #1a1233; color: #c4b5fd; border: 1px solid #4c1d95;
+      border-radius: 9px; padding: 8px 12px; font: inherit; font-weight: 700;
+      cursor: pointer; white-space: nowrap;
+    }
+    button.roast:disabled { opacity: .5; cursor: default; }
+    .dna { border-radius: 12px; padding: 12px; border: 1px solid #7c3aed; background: #140f28; }
+    .dna .archetype { font-size: 15px; font-weight: 800; color: #c4b5fd; }
+    .dna .sym { margin-top: 6px; font-size: 12.5px; color: #cbd5e1; }
+    .dna .sym b { color: #f8fafc; }
+    .dna .sidetag { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .dna .tell { margin-top: 6px; font-size: 12.5px; color: #e2e8f0; }
+    .dna .tell::before { content: "- "; color: #7c3aed; }
   `;
 
   let root, els, busy = false;
@@ -338,11 +352,73 @@ const EnmaPanel = (() => {
     els.feed.scrollTop = els.feed.scrollHeight;
   }
 
+  // ---- roast flow -----------------------------------------------------------
+  // The onboarding hook (growth plan Horizon 1): paste a watchlist, get an
+  // instant read + trading DNA. Every number here is rendered verbatim from
+  // the /roast payload; archetype and tells are computed engine-side (in
+  // quorum/roast.py) and shown as-is - the panel originates nothing.
+  const SIDE_TAG = { "1": ["long", "#22c55e"], "-1": ["short", "#ef4444"] };
+
+  function renderRoast(p) {
+    const reads = p.reads || [];
+    for (const r of reads) {
+      if (!r.ok) {
+        line("dim", `${r.exchange}:${r.symbol} - skipped (${r.error || "no data"})`);
+        continue;
+      }
+      const el = line("dim", "");
+      el.className = "dna-line";
+      const tag = SIDE_TAG[String(r.side)];
+      if (tag) {
+        const t = h("span", "sidetag", tag[0] + " ");
+        t.style.color = tag[1];
+        el.appendChild(t);
+      }
+      el.append(`${r.exchange}:${r.symbol} -> `);
+      const act = h("b", "", r.action);
+      act.style.color = ACTION_COLORS[r.action] || "#e2e8f0";
+      el.appendChild(act);
+      el.append(` (P(bull) ${r.p_bull} - edge ${r.edge})`);
+    }
+
+    const card = h("div", "dna");
+    card.appendChild(h("div", "archetype", p.archetype || ""));
+    for (const t of p.tells || []) card.appendChild(h("div", "tell", t));
+    if (reads.some((r) => r.ok)) {
+      card.appendChild(h("div", "tell",
+        "Ask the full council on any one for levels and a tracked call."));
+    }
+    card.appendChild(h("div", "disclaimer", "AI analysis, not investment advice."));
+    els.feed.appendChild(card);
+    els.feed.scrollTop = els.feed.scrollHeight;
+  }
+
+  function roast() {
+    if (busy) return;
+    const raw = els.roastInput.value.trim();
+    if (!raw) {
+      line("warn", "Paste a few names to roast, e.g.  +RELIANCE  NASDAQ:AAPL  -TCS");
+      return;
+    }
+    const n = raw.split(/[,\s]+/).filter(Boolean).length;
+    line("enma", `Reading your ${n} name${n === 1 ? "" : "s"} - instant, nothing saved.`);
+    setBusy(true);
+
+    const port = chrome.runtime.connect({ name: "enma-roast" });
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "roast-result") { renderRoast(msg.payload); setBusy(false); }
+      else if (msg.type === "bridge-error") { line("err", msg.message); setBusy(false); }
+    });
+    port.onDisconnect.addListener(() => setBusy(false));
+    port.postMessage({ symbols: raw });
+  }
+
   // ---- ask flow -------------------------------------------------------------
   function setBusy(b) {
     busy = b;
     els.orb.classList.toggle("busy", b);
     els.ask.disabled = b;
+    if (els.roastBtn) els.roastBtn.disabled = b;
   }
 
   const ACK_BY_INTENT = {
@@ -432,7 +508,17 @@ const EnmaPanel = (() => {
     symInput.placeholder = "Ticker, e.g. RELIANCE or NSE:INFY";
     symInput.addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); e.stopPropagation(); });
     symRow.append(symInput);
-    footer.append(row, symRow);
+
+    // Onboarding roast row: a watchlist -> instant read + trading DNA.
+    const roastRow = h("div", "row roastrow");
+    const roastInput = h("input");
+    roastInput.placeholder = "Roast a watchlist: +RELIANCE NASDAQ:AAPL -TCS";
+    roastInput.addEventListener("keydown", (e) => { if (e.key === "Enter") roast(); e.stopPropagation(); });
+    const roastBtn = h("button", "roast", "Roast");
+    roastBtn.addEventListener("click", roast);
+    roastRow.append(roastInput, roastBtn);
+
+    footer.append(row, symRow, roastRow);
 
     wrap.append(header, feed, footer);
     shadow.append(style, wrap);
@@ -453,7 +539,7 @@ const EnmaPanel = (() => {
     });
     window.addEventListener("mouseup", () => { drag = null; });
 
-    els = { orb, chip, feed, q, ask: askBtn, symRow, symInput };
+    els = { orb, chip, feed, q, ask: askBtn, symRow, symInput, roastInput, roastBtn };
     return host;
   }
 
@@ -472,9 +558,11 @@ const EnmaPanel = (() => {
           + "NSE/BSE/NASDAQ/NYSE, sorry. Type a ticker on one of those below if you meant a different one.");
         els.symRow.classList.add("show");
       } else if (t) {
-        line("enma", `Hey - I can see ${t.symbol} on screen. Ask me anything about it, or just hit Ask for the full council read.`);
+        line("enma", `Hey - I can see ${t.symbol} on screen. Ask me anything about it, or hit Ask for the full council read.`);
+        line("dim", "New here? Paste your watchlist in the Roast box below for an instant read on all of it.");
       } else {
         line("enma", "Hey - I couldn't auto-read a ticker here. Type one below and ask away.");
+        line("dim", "Or paste your watchlist in the Roast box for an instant read on all of it.");
         els.symRow.classList.add("show");
       }
     } else {

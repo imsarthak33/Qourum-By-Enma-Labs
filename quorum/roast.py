@@ -50,6 +50,15 @@ class SymbolRead:
     z_value: float | None = None
     sector: str | None = None
 
+    def to_json(self) -> dict[str, Any]:
+        """The subset the Enma overlay renders. Numbers only - the overlay,
+        like the CLI, shows these verbatim and never recomputes."""
+        return {
+            "symbol": self.symbol, "exchange": self.exchange, "side": self.side,
+            "ok": self.ok, "error": self.error, "action": self.action,
+            "p_bull": self.p_bull, "edge": self.edge,
+        }
+
 
 @dataclass
 class RoastResult:
@@ -60,6 +69,13 @@ class RoastResult:
     @property
     def ok_reads(self) -> list[SymbolRead]:
         return [r for r in self.reads if r.ok]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "archetype": self.archetype,
+            "tells": list(self.tells),
+            "reads": [r.to_json() for r in self.reads],
+        }
 
 
 def parse_entry(raw: str) -> tuple[str, str, int] | None:
