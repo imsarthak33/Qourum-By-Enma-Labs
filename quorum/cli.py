@@ -304,6 +304,65 @@ def batch(
         raise typer.Exit(code=1)
 
 
+ROAST_ACTION_STYLE = {"BUY": "green", "SELL": "red", "WAIT": "yellow",
+                      "AVOID": "red", "NO_CALL": "cyan"}
+# You're long/short/watching -> a compact tag rendered before the symbol.
+SIDE_TAG = {1: "[green]long[/green] ", -1: "[red]short[/red] ", 0: ""}
+
+
+# ignore_unknown_options so a short-position entry like "-TCS" reaches us as a
+# positional argument instead of being parsed as an unknown CLI flag.
+@app.command(context_settings={"ignore_unknown_options": True})
+def roast(
+    symbols: Optional[list[str]] = typer.Argument(
+        None, help="Your names: [+|-][EXCHANGE:]SYMBOL. + = you're long, "
+                   "- = short, neither = watching. e.g. +RELIANCE -INFY NASDAQ:AAPL"),
+    watchlist: Optional[Path] = typer.Option(
+        None, "--watchlist", "-w",
+        help="Read entries from a file instead (one per line, # comments ok)"),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+):
+    """Roast a watchlist or a handful of positions - an instant, sharp,
+    personalized read against the same quant models the council uses, plus your
+    'trading DNA' across the whole set. Fast: quant-only, no LLM, nothing saved."""
+    config = QuorumConfig.load(config_path)
+    from . import roast as roast_mod
+
+    raw_entries: list[str] = list(symbols or [])
+    if watchlist:
+        for line in watchlist.read_text(encoding="utf-8-sig").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                raw_entries.append(line)
+    entries = [e for e in (roast_mod.parse_entry(r) for r in raw_entries) if e]
+    if not entries:
+        console.print("[yellow]Give me some names to roast: quorum roast +RELIANCE "
+                      "NASDAQ:AAPL  (or --watchlist file.txt)[/yellow]")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold]Reading your {len(entries)} names...[/bold] "
+                  "[dim](quant-only, nothing saved)[/dim]")
+    result = roast_mod.roast(entries, config)
+
+    for r in result.reads:
+        if not r.ok:
+            console.print(f"  [dim]{r.exchange}:{r.symbol} - skipped ({r.error})[/dim]")
+            continue
+        style = ROAST_ACTION_STYLE.get(r.action, "white")
+        tag = SIDE_TAG.get(r.side, "")
+        console.print(f"  {tag}[bold]{r.exchange}:{r.symbol}[/bold] -> "
+                      f"[{style}]{r.action}[/{style}] "
+                      f"[dim](P(bull) {r.p_bull} | edge {r.edge})[/dim]")
+
+    console.print(Panel(
+        "\n".join([f"[bold]{result.archetype}[/bold]", ""]
+                  + [f"- {t}" for t in result.tells]
+                  + (["", "[dim]Ask the full council on any one for levels and a "
+                      "tracked call: quorum analyze SYMBOL[/dim]"] if result.ok_reads else [])),
+        title="Your trading DNA", border_style="magenta"))
+    console.print(f"[italic dim]{DISCLAIMER}[/italic dim]")
+
+
 @app.command("leaderboard")
 def leaderboard_cmd():
     """Show the public community leaderboard (accuracy + calibration quality)."""
