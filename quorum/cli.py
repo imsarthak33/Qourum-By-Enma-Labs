@@ -83,7 +83,26 @@ def _render_event(ev: dict) -> None:
         console.print(f"[red]error: {ev['message']}[/red]")
 
 
-def _render_verdict(v: dict, degraded: bool, latency_ms: int) -> None:
+# Cold-start transparency, load-bearing (growth plan Horizon 0): calibration
+# confidence renders inside the verdict body, not as a footnote, with the
+# honest n so thin data reads as "watch it grow" rather than false precision.
+CALIB_STYLE = {"low": "yellow", "medium": "cyan", "high": "green"}
+CALIB_NOTES = {
+    "low": "young track record - treat probabilities as directional",
+    "medium": "track record building - numbers firming up",
+    "high": "fitted on a full outcome history",
+}
+
+
+def _calibration_line(level: str, resolved: Optional[int] = None) -> str:
+    style = CALIB_STYLE.get(level, "yellow")
+    n = f", n={resolved} resolved" if resolved is not None else ""
+    return (f"[bold {style}]calibration {level.upper()}[/bold {style}]"
+            f" ({CALIB_NOTES.get(level, '')}{n})")
+
+
+def _render_verdict(v: dict, degraded: bool, latency_ms: int,
+                    resolved: Optional[int] = None) -> None:
     action = v["action"]
     style = {"BUY": "green", "SELL": "red", "WAIT": "yellow",
              "AVOID": "red", "NO_CALL": "cyan"}.get(action, "white")
@@ -97,13 +116,13 @@ def _render_verdict(v: dict, degraded: bool, latency_ms: int) -> None:
         f"P(bull) [bold]{v['p_bull_calibrated']}[/bold] | EV {v['expected_value']}"
         f" | edge {v['edge']} vs hurdle {v['hurdle_tau']}"
     )
+    lines.append(_calibration_line(v["calibration_confidence"], resolved))
     if v.get("position_size_pct") is not None:
         lines.append(f"Kelly f* {v['kelly_fraction']} -> size {v['position_size_pct']:.1%} of capital")
     weights = " | ".join(f"{AGENT_LABELS.get(a, a).split()[-1]} {w}"
                          for a, w in v.get("agent_weights", {}).items())
     lines.append(f"[dim]weights: {weights}[/dim]")
-    lines.append(f"[dim]calibration confidence: {v['calibration_confidence']}"
-                 + (" | DEGRADED" if degraded else "") + f" | {latency_ms} ms[/dim]")
+    lines.append(f"[dim]{'DEGRADED | ' if degraded else ''}{latency_ms} ms[/dim]")
     if v.get("rationale"):
         lines.append(f"\n{v['rationale']}")
     lines.append(f"\n[italic dim]{DISCLAIMER}[/italic dim]")
@@ -141,7 +160,11 @@ def analyze(
             "verdict": debate.verdict.to_json() if debate.verdict else None,
         }))
     elif debate.verdict:
-        _render_verdict(debate.verdict.to_json(), debate.degraded, debate.latency_ms)
+        from .storage import Storage
+
+        resolved = Storage(config.db_path).track_record().get("resolved")
+        _render_verdict(debate.verdict.to_json(), debate.degraded,
+                        debate.latency_ms, resolved)
 
 
 def _noop_event(_: dict) -> None:
@@ -174,11 +197,8 @@ def history(limit: int = typer.Option(15, "--limit", "-n")):
     console.print(table)
 
 
-@app.command()
-def resolve():
-    """Check open verdicts against price history; update the outcome log,
-    Hedge weights, and (with --share debates) the public leaderboard."""
-    config = QuorumConfig.load()
+def _resolve_pass(config: QuorumConfig) -> None:
+    """One outcome-tracking pass; shared by `resolve` and `batch`."""
     from . import leaderboard
     from .outcomes import check_outcomes
     from .storage import Storage
@@ -203,6 +223,85 @@ def resolve():
             f"{record['resolved']} resolved | Brier {record['brier_score']} "
             f"[dim](calibration confidence: {record['calibration_confidence']})[/dim]"
         )
+
+
+@app.command()
+def resolve():
+    """Check open verdicts against price history; update the outcome log,
+    Hedge weights, and (with --share debates) the public leaderboard."""
+    _resolve_pass(QuorumConfig.load())
+
+
+# Growth plan Horizon 0 basket: liquid names on both supported market models,
+# small enough for real receipts without noise. Override with --basket.
+DEFAULT_BASKET: list[tuple[str, str]] = [
+    ("NSE", "RELIANCE"), ("NSE", "INFY"), ("NSE", "HDFCBANK"),
+    ("NSE", "TCS"), ("NSE", "ICICIBANK"),
+    ("NASDAQ", "AAPL"), ("NASDAQ", "MSFT"), ("NASDAQ", "NVDA"),
+    ("NASDAQ", "GOOGL"), ("NASDAQ", "AMZN"),
+]
+
+
+def _parse_basket(path: Path) -> list[tuple[str, str]]:
+    """One entry per line, `EXCHANGE:SYMBOL` (bare symbols default to NSE);
+    blank lines and # comments ignored. utf-8-sig: Windows editors (and
+    PowerShell's Out-File) routinely write a BOM, which must not become part
+    of the first symbol."""
+    entries: list[tuple[str, str]] = []
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        exchange, _, symbol = line.rpartition(":")
+        if not exchange:
+            exchange = "NSE"
+        entries.append((exchange.strip().upper(), symbol.strip().upper()))
+    return entries
+
+
+@app.command()
+def batch(
+    basket: Optional[Path] = typer.Option(
+        None, "--basket", "-b",
+        help="Basket file: one EXCHANGE:SYMBOL per line (bare symbol = NSE). "
+             "Defaults to a built-in 10-name NSE+NASDAQ basket."),
+    share: bool = typer.Option(
+        True, "--share/--no-share",
+        help="Mark each debate for public-leaderboard submission on resolution "
+             "(outcome only - never a query or your identity)"),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+):
+    """Daily outcome-accumulation pass (growth plan Horizon 0): analyze every
+    basket symbol, then resolve open verdicts. One failing symbol never aborts
+    the rest - built to run unattended under a scheduler."""
+    config = QuorumConfig.load(config_path)
+    from .orchestrator import run_debate
+
+    entries = _parse_basket(basket) if basket else DEFAULT_BASKET
+    analyzed = 0
+    for exchange, symbol in entries:
+        try:
+            debate = asyncio.run(
+                run_debate(symbol, exchange=exchange, config=config,
+                           on_event=_noop_event, share=share)
+            )
+        except Exception as exc:  # a bad symbol/feed must not kill the pass
+            console.print(f"x {exchange}:{symbol} crashed: {exc}")
+            continue
+        if debate.status == "failed" or debate.verdict is None:
+            console.print(f"x {exchange}:{symbol} failed")
+            continue
+        v = debate.verdict.to_json()
+        console.print(
+            f"+ {exchange}:{symbol}: {v['action']} | P(bull) {v['p_bull_calibrated']}"
+            f" | edge {v['edge']} | calib {v['calibration_confidence']}"
+            + (" (degraded)" if debate.degraded else "")
+        )
+        analyzed += 1
+    console.print(f"\nanalyzed {analyzed}/{len(entries)}")
+    _resolve_pass(config)
+    if entries and analyzed == 0:
+        raise typer.Exit(code=1)
 
 
 @app.command("leaderboard")

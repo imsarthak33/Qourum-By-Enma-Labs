@@ -18,3 +18,7 @@ venv/
 *.db
 quorum.yaml
 .env
+logs/
+
+# Session working notes (internal strategy - not for the public repo)
+HANDOFF.md

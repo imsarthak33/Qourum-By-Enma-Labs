@@ -89,6 +89,11 @@ const EnmaPanel = (() => {
     .verdict .nums b { color: #f8fafc; }
     .verdict .rationale { margin-top: 8px; color: #e2e8f0; font-size: 12.5px; }
     .verdict .meta { margin-top: 8px; font-size: 11px; color: #64748b; }
+    .verdict .calib { margin-top: 6px; font-size: 11.5px; font-weight: 700;
+                      padding: 3px 8px; border-radius: 6px; display: inline-block; }
+    .verdict .calib.low { background: rgba(234,179,8,.14); color: #eab308; }
+    .verdict .calib.medium { background: rgba(96,165,250,.14); color: #60a5fa; }
+    .verdict .calib.high { background: rgba(34,197,94,.14); color: #22c55e; }
     .disclaimer { font-size: 11px; color: #64748b; font-style: italic; margin-top: 6px; }
     footer { padding: 10px 12px; border-top: 1px solid #263048; background: #0f172a; }
     .row { display: flex; gap: 8px; }
@@ -295,6 +300,18 @@ const EnmaPanel = (() => {
     action.style.color = color;
     card.appendChild(action);
 
+    // Cold-start transparency, load-bearing (growth plan Horizon 0): the
+    // confidence level renders verbatim from the payload; only the framing
+    // around it is Enma's voice.
+    const CALIB_NOTES = {
+      low: "young track record - treat probabilities as directional until more calls resolve",
+      medium: "track record building - numbers are firming up",
+      high: "fitted on a full outcome history",
+    };
+    const level = v.calibration_confidence || "low";
+    card.appendChild(h("div", "calib " + level,
+      `calibration: ${level.toUpperCase()} - ${CALIB_NOTES[level] || ""}`));
+
     if (v.entry != null && (v.action === "BUY" || v.action === "SELL")) {
       const lv = h("div", "nums");
       lv.append("entry ", h("b", "", String(v.entry)), " - target ", h("b", "", String(v.target)),
@@ -314,8 +331,7 @@ const EnmaPanel = (() => {
 
     const weights = Object.entries(v.agent_weights || {})
       .map(([a, w]) => `${(AGENT_LABELS[a] || a).split(" ").pop()} ${w}`).join(" - ");
-    card.appendChild(h("div", "meta",
-      `weights: ${weights}\ncalibration confidence: ${v.calibration_confidence}`));
+    card.appendChild(h("div", "meta", `weights: ${weights}`));
     card.appendChild(h("div", "disclaimer", v.disclaimer || "AI analysis, not investment advice."));
 
     els.feed.appendChild(card);
