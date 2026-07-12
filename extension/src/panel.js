@@ -126,6 +126,20 @@ const EnmaPanel = (() => {
     .dna .sidetag { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
     .dna .tell { margin-top: 6px; font-size: 12.5px; color: #e2e8f0; }
     .dna .tell::before { content: "- "; color: #7c3aed; }
+    .monitorrow { margin-top: 8px; align-items: center; gap: 10px; }
+    button.watch {
+      background: #0f172a; color: #93c5fd; border: 1px solid #334155;
+      border-radius: 9px; padding: 8px 12px; font: inherit; font-weight: 700;
+      cursor: pointer; white-space: nowrap;
+    }
+    button.watch:disabled { opacity: .5; cursor: default; }
+    .mstatus { color: #64748b; font-size: 11px; }
+    .mstatus.on { color: #34d399; }
+    button.linkbtn {
+      background: none; border: none; color: #93c5fd; cursor: pointer;
+      font: inherit; font-size: 11px; text-decoration: underline; padding: 0;
+    }
+    button.linkbtn:disabled { opacity: .5; cursor: default; }
   `;
 
   let root, els, busy = false;
@@ -413,12 +427,65 @@ const EnmaPanel = (() => {
     port.postMessage({ symbols: raw });
   }
 
+  // ---- proactive portfolio alerts (growth plan Horizon 2) -------------------
+  // Set the watched list to whatever's in the Roast box; the service worker
+  // then re-runs the council hourly and notifies only on a verdict change.
+  // The panel sends control messages and renders status - the diffing,
+  // scheduling, and (verbatim) notifications all live in the service worker.
+  function refreshMonitorStatus() {
+    if (!chrome.runtime?.id) return;
+    chrome.runtime.sendMessage({ type: "enma:portfolio:status" }, (s) => {
+      if (chrome.runtime.lastError || !s || !els.watchBtn) return;
+      els.watchBtn.textContent = s.monitoring ? "Stop watching" : "Watch for changes";
+      els.mstatus.textContent = s.monitoring
+        ? `watching - re-checks every ${s.periodMinutes} min` : "not watching";
+      els.mstatus.classList.toggle("on", s.monitoring);
+      els.checkBtn.style.display = s.monitoring ? "inline" : "none";
+    });
+  }
+
+  function toggleWatch() {
+    chrome.runtime.sendMessage({ type: "enma:portfolio:status" }, (s) => {
+      if (chrome.runtime.lastError) return;
+      if (s && s.monitoring) {
+        chrome.runtime.sendMessage({ type: "enma:portfolio:clear" }, () => {
+          refreshMonitorStatus();
+          line("dim", "Stopped watching your portfolio.");
+        });
+        return;
+      }
+      const raw = els.roastInput.value.trim();
+      if (!raw) {
+        line("warn", "Type your holdings in the box above, then hit Watch for changes.");
+        return;
+      }
+      chrome.runtime.sendMessage({ type: "enma:portfolio:set", symbols: raw }, () => {
+        refreshMonitorStatus();
+        line("enma", "Watching your portfolio. I'll re-run the council on a schedule and "
+          + "only ping you when a verdict actually changes.");
+        line("dim", "Heads up: I can only check while Chrome is open and quorum serve is running.");
+      });
+    });
+  }
+
+  function checkNow() {
+    line("enma", "Re-checking your portfolio now...");
+    chrome.runtime.sendMessage({ type: "enma:portfolio:checknow" }, (r) => {
+      if (chrome.runtime.lastError || !r) return;
+      if (!r.ok) line("warn", `Couldn't check right now: ${r.reason}`);
+      else line("dim", `Checked ${r.checked} - ${r.changed} verdict `
+        + `change${r.changed === 1 ? "" : "s"}${r.changed ? " (see notifications)" : ""}.`);
+    });
+  }
+
   // ---- ask flow -------------------------------------------------------------
   function setBusy(b) {
     busy = b;
     els.orb.classList.toggle("busy", b);
     els.ask.disabled = b;
     if (els.roastBtn) els.roastBtn.disabled = b;
+    if (els.watchBtn) els.watchBtn.disabled = b;
+    if (els.checkBtn) els.checkBtn.disabled = b;
   }
 
   const ACK_BY_INTENT = {
@@ -518,7 +585,17 @@ const EnmaPanel = (() => {
     roastBtn.addEventListener("click", roast);
     roastRow.append(roastInput, roastBtn);
 
-    footer.append(row, symRow, roastRow);
+    // Proactive monitoring: watch the Roast box's list for verdict changes.
+    const monitorRow = h("div", "row monitorrow");
+    const watchBtn = h("button", "watch", "Watch for changes");
+    watchBtn.addEventListener("click", toggleWatch);
+    const mstatus = h("span", "mstatus", "not watching");
+    const checkBtn = h("button", "linkbtn", "Check now");
+    checkBtn.style.display = "none";
+    checkBtn.addEventListener("click", checkNow);
+    monitorRow.append(watchBtn, mstatus, checkBtn);
+
+    footer.append(row, symRow, roastRow, monitorRow);
 
     wrap.append(header, feed, footer);
     shadow.append(style, wrap);
@@ -539,7 +616,8 @@ const EnmaPanel = (() => {
     });
     window.addEventListener("mouseup", () => { drag = null; });
 
-    els = { orb, chip, feed, q, ask: askBtn, symRow, symInput, roastInput, roastBtn };
+    els = { orb, chip, feed, q, ask: askBtn, symRow, symInput, roastInput, roastBtn,
+            watchBtn, mstatus, checkBtn };
     return host;
   }
 
@@ -565,6 +643,7 @@ const EnmaPanel = (() => {
         line("dim", "Or paste your watchlist in the Roast box for an instant read on all of it.");
         els.symRow.classList.add("show");
       }
+      refreshMonitorStatus();
     } else {
       document.documentElement.appendChild(root);
       const t = EnmaTickers.detect();

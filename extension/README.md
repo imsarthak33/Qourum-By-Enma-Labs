@@ -37,6 +37,20 @@ your machine, your data. **AI analysis, not investment advice.**
    instant read on the whole set plus your "trading DNA" — `+` means you're
    long it, `-` short, neither just watching.
 
+## Watch your portfolio (proactive alerts)
+
+Type your holdings in the **Roast** box (`+RELIANCE NASDAQ:AAPL -TCS`) and hit
+**Watch for changes**. Enma re-runs the council on the whole set on a schedule
+(hourly) and fires a desktop notification **only when a verdict actually
+changes** — `WAIT → BUY`, say — never on every tick. **Check now** forces an
+immediate pass.
+
+It's the same quant-only `/roast` the overlay uses, so it costs no inference.
+Honest limitation, stated in the panel too: it can only check **while Chrome is
+open and `quorum serve` is running** — a bridge-down check is skipped silently,
+not queued. Nothing leaves your machine; the watched list lives in
+`chrome.storage.local`.
+
 ## What you'll see
 
 ```

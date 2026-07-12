@@ -12,6 +12,11 @@
 
 const BRIDGE = "http://127.0.0.1:8756";
 
+// Pure diff logic (EnmaPortfolio) - imported so the alarm handler below can
+// tell a real verdict change from noise. It has no chrome deps and its own
+// node test; keeping it separate is what makes that test possible.
+importScripts("portfolio.js");
+
 // Stale-code confusion has cost real debugging time twice now: the extension
 // tile and any already-open tab each cache their own copy of this code until
 // explicitly reloaded/refreshed, with no visible sign that's happened. This
@@ -33,6 +38,91 @@ chrome.commands.onCommand.addListener((cmd) => {
   if (cmd === "toggle-enma") toggleActiveTab();
 });
 chrome.action.onClicked.addListener(() => toggleActiveTab());
+
+// --- proactive portfolio alerts (growth plan Horizon 2) -------------------
+// Tell Enma what you hold once; on a schedule it re-reads the council on every
+// position (via the same quant-only /roast the overlay uses) and speaks ONLY
+// when a verdict actually changes. Zero new hosted infra, zero new quant math.
+// Honest limitation, surfaced in the panel: this only fires while Chrome is
+// running AND `quorum serve` is up - a bridge-down tick is skipped silently
+// rather than nagging.
+const ALARM = "enma-portfolio-check";
+const CHECK_PERIOD_MIN = 60; // daily-bar models; hourly is ample, never spammy
+const P = { list: "enma_portfolio", known: "enma_lastknown", on: "enma_monitoring" };
+
+async function fetchRoast(symbols) {
+  const res = await fetch(`${BRIDGE}/roast?symbols=${encodeURIComponent(symbols)}`,
+                          { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`bridge answered ${res.status}`);
+  return res.json();
+}
+
+// One monitoring pass. notify=false seeds the baseline (records actions
+// without speaking) the moment a portfolio is set, so only genuine LATER
+// changes alert. Returns a small status object for the panel's "Check now".
+async function runPortfolioCheck(notify = true) {
+  const st = await chrome.storage.local.get([P.list, P.known, P.on]);
+  const symbols = st[P.list];
+  if (!st[P.on] || !symbols) return { ok: false, reason: "not monitoring" };
+  let body;
+  try {
+    body = await fetchRoast(symbols);
+  } catch (err) {
+    return { ok: false, reason: String(err && err.message || err) };
+  }
+  const reads = body.reads || [];
+  const changes = notify ? EnmaPortfolio.diffActions(st[P.known], reads) : [];
+  await chrome.storage.local.set({ [P.known]: EnmaPortfolio.nextKnown(st[P.known], reads) });
+  for (const c of changes) notifyChange(c);
+  return { ok: true, changed: changes.length, checked: reads.filter((r) => r.ok).length };
+}
+
+function notifyChange(c) {
+  // Enma narrates; the from/to actions are the engine's, shown verbatim.
+  chrome.notifications.create(`enma-${c.key}-${Date.now()}`, {
+    type: "basic",
+    iconUrl: "icons/enma-128.png",
+    title: `Enma: ${c.symbol} changed`,
+    message: `The council moved ${c.from} -> ${c.to}. Open Enma for the full read.`,
+    priority: 1,
+  });
+}
+
+async function setPortfolio(symbols) {
+  await chrome.storage.local.set({ [P.list]: symbols, [P.on]: true, [P.known]: {} });
+  chrome.alarms.create(ALARM, { periodInMinutes: CHECK_PERIOD_MIN });
+  await runPortfolioCheck(false); // seed baseline now, silently
+  return { monitoring: true, symbols };
+}
+
+async function clearPortfolio() {
+  await chrome.alarms.clear(ALARM);
+  await chrome.storage.local.set({ [P.on]: false });
+  return { monitoring: false };
+}
+
+async function portfolioStatus() {
+  const st = await chrome.storage.local.get([P.list, P.on]);
+  return { monitoring: !!st[P.on], symbols: st[P.list] || "",
+           periodMinutes: CHECK_PERIOD_MIN };
+}
+
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === ALARM) runPortfolioCheck(true);
+});
+
+// Panel -> SW control messages (one-shot; the streaming flows use Ports). Each
+// returns a value, so we keep the channel open with `return true`.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || !msg.type || !msg.type.startsWith("enma:portfolio:")) return;
+  const done = (p) => sendResponse(p);
+  if (msg.type === "enma:portfolio:set") setPortfolio(msg.symbols).then(done);
+  else if (msg.type === "enma:portfolio:clear") clearPortfolio().then(done);
+  else if (msg.type === "enma:portfolio:status") portfolioStatus().then(done);
+  else if (msg.type === "enma:portfolio:checknow") runPortfolioCheck(true).then(done);
+  else return;
+  return true; // async sendResponse
+});
 
 // --- SSE plumbing ----------------------------------------------------------
 // Minimal SSE parser: accumulates text chunks, emits {event, data} per blank-
